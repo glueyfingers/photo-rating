@@ -14,27 +14,23 @@ BILDER_ORDNER = Path(r"E:\photos\2026\Venedig\Kamera")  # <-- anpassen
 AUSWAHL_ORDNER = BILDER_ORDNER / "Auswahl"
 CSV_OUTPUT    = Path("bewertung_urlaub.csv")
 OLLAMA_URL    = "http://eva:11434/api/generate"
-MODELL        = "qwen3-vl:4b"  # oder z.B. "llava"
+MODELL        = "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M" # "qwen3-vl:4b"  # oder z.B. "llava"
 UNTERSTUETZTE_ENDUNGEN = {".jpg", ".jpeg"}
 TOP_N = 2  # wie viele Bilder übernommen werden sollen
 
 PROMPT = (
     "Du bist ein extrem kritischer Profi-Fotograf für Urlaubsbilder.\n"
-    "Bewerte NUR nach diesen harten Kriterien (jeder Punkt muss erfüllt sein):\n"
-    "1. Perfekte Schärfe (keine Verwacklung, kein Bewegungsunschärfe)\n"
+    "Bewerte nach diesen Kriterien:\n"
+    "1. Perfekte Schärfe (keine Verwacklung, nur gewollte Bewegungsunschärfe)\n"
     "2. Korrekte Belichtung (keine Über-/Unterbelichtung)\n"
-    "3. Offene Augen bei Personen (geschlossene Augen = Score 0-2)\n"
+    "3. Bei Personen im Hauptmotiv sollen die Augen geöffnet sein und die Gesichter sind zu erkennen\n"
     "4. Starker Bildaufbau (Drittelregel, führende Linien oder Natürlichkeit)\n"
-    "5. Postkarten-Ästhetik (keine langweiligen Schnappschüsse)\n"
-    "6. Komplementärfarben\n"
-    "Score-Skala:\n"
-    "00-35 = Unbrauchbar (technisch fehlerhaft, geschlossene Augen, verwackelt)\n"
-    "36-65 = Durchschnitt (akzeptabel, aber nichts Besonderes)\n"
-    "76-85 = Gut (fast perfekt, aber kleine Mängel)\n"
-    "86-100 = Weltklasse (perfekt komponiert, emotionell, technisch einwandfrei)\n\n"
-    "Gib NUR JSON: {\"score\": Zahl 0-100, \"grund\": \"1-2 Sätze mit FEHLERN\", \"tags\": [\"tag1\",\"tag2\"]}\n"
-    "Sei brutal ehrlich - 80% deiner Urlaubs-Schnappschüsse sind Durchschnitt! Ignoriere die Auflösung des Bildes, konzentriere dich auf die Qualität. Keine Nettigkeiten, nur knallharte Kritik und ehrliche Bewertung!\n"
-    "ANTWORTEN SIE IMMER ALS REINES JSON-OBJEKT!"
+    "5. Komplementärfarben\n"
+    "ANTWORTEN SIE IMMER ALS REINES JSON-OBJEKT nach folgendem Muster: {\"score\": 0-100, \"kommentar\": \"1-2 Sätze\", \"tags\": [\"tag1\",\"tag2\"]}\n"
+    "'score' entspricht der Bewertung als Zahl. Wobei 0 einem sehr schlechtem Bild entspricht und 100 einem perfekten Bild entspricht\n"
+    "'kommentar' sind Verbesserungsvorschläge\n"
+    "'tags' soll keine Kritik enthalten, sondern ausschließlich eine Beschreibung des Bildes oder Hauptmotiv\n"
+    "Sei brutal ehrlich - 80% deiner Urlaubs-Schnappschüsse sind Durchschnitt! Ignoriere die Auflösung des Bildes, konzentriere dich auf die Komposition des Bildes. Keine Nettigkeiten, nur knallharte Kritik und ehrliche Bewertung!"
 )
 
 # === HILFSFUNKTIONEN ==========================================================
@@ -59,53 +55,50 @@ def bewerte_bild(pfad: Path) -> dict:
         "model": MODELL,
         "prompt": PROMPT,
         "images": [image_b64],
-        "stream": False,
-        "options": {
-            "temperature": 0.1,  # ← NEU: weniger Kreativität = bessere JSON-Konformität
-            "num_predict": 128   # ← NEU: begrenzte Länge
-        }
+        "stream": False
     }
 
     response = requests.post(OLLAMA_URL, json=payload, timeout=300)
     response.raise_for_status()
     roh_text = response.json().get("response", "").strip()
 
-     # 1. Versuche direkte JSON-Parsing
-     try:
-         data = json.loads(roh_text)
-         return {
-             "score": data.get("score"),
-             "kommentar": data.get("kommentar", "") or data.get("grund", ""),
-             "tags": data.get("tags", []),
-         }
-     except json.JSONDecodeError:
-         pass
+    # 1. Versuche direkte JSON-Parsing
+    try:
+        data = json.loads(roh_text)
+        return {
+            "score": data.get("score"),
+            "kommentar": data.get("kommentar", ""),
+            "tags": data.get("tags", []),
+        }
+    except json.JSONDecodeError:
+        pass
 
-     # 2. Extrahiere JSON mit Regex (funktioniert auch bei ```json ... ``` oder Text davor/nachher)
-     json_match = re.search(r'\{.*"score"\s*:\s*\d+.*\}', roh_text, re.DOTALL)
-     if json_match:
-         try:
-             data = json.loads(json_match.group(0))
-             return {
-                 "score": data.get("score"),
-                 "kommentar": data.get("kommentar", "") or data.get("grund", ""),
-                 "tags": data.get("tags", []),
-             }
-         except json.JSONDecodeError:
-             pass
+    # 2. Extrahiere JSON mit Regex
+    json_match = re.search(r'\{.*"score"\s*:\s*\d+.*\}', roh_text, re.DOTALL)
+    if json_match:
+        try:
+            data = json.loads(json_match.group(0))
+            return {
+                "score": data.get("score"),
+                "kommentar": data.get("kommentar", ""),
+                "tags": data.get("tags", []),
+            }
+        except json.JSONDecodeError:
+            pass
 
-     # 3. Fallback: Score aus Text extrahieren (letzter Rettungsanker)
-     score_match = re.search(r'score\s*[:\-=]\s*(\d+)', roh_text, re.IGNORECASE)
-     if score_match:
-         return {
-             "score": int(score_match.group(1)),
-             "kommentar": "Score extrahiert, volles JSON fehlgeschlagen",
-             "tags": []
-         }
+    # 3. Fallback: Score aus Text extrahieren
+    score_match = re.search(r'score\s*[:\-=]\s*(\d+)', roh_text, re.IGNORECASE)
+    if score_match:
+        return {
+            "score": int(score_match.group(1)),
+            "kommentar": "Score extrahiert, volles JSON fehlgeschlagen",
+            "tags": []
+        }
 
-     # 4. Total-Fail: Standard-Default
-     print(f"  DEBUG: Roh-Antwort: {repr(roh_text[:200])}...")  # Nur zur Fehlersuche
-     raise ValueError("Konnte kein gültiges JSON oder Score extrahieren")
+    # 4. Total-Fail: Debug ausgeben
+    print(f"  DEBUG: Roh-Antwort: {response.json().get("response", "")}")  # Nur zur Fehlersuche
+    raise ValueError("Konnte kein gültiges JSON oder Score extrahieren")
+
 
 def schreibe_csv(ergebnisse: list, ziel_pfad: Path):
     """Schreibt die Bewertungsergebnisse in eine CSV-Datei."""
