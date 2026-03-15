@@ -3,16 +3,19 @@ import csv
 import json
 import base64
 import time
+import shutil
 from pathlib import Path
 
 import requests  # pip install requests
 
 # === KONFIGURATION ============================================================
 BILDER_ORDNER = Path(r"D:\daten\NextCloud\share\Lichtblick\Stadtbild")  # <-- anpassen
+AUSWAHL_ORDNER = BILDER_ORDNER / "Auswahl"
 CSV_OUTPUT    = Path("bewertung_urlaub.csv")
 OLLAMA_URL    = "http://eva:11434/api/generate"
 MODELL        = "qwen3-vl:4b"  # oder z.B. "llava"
 UNTERSTUETZTE_ENDUNGEN = {".jpg", ".jpeg"}
+TOP_N = 2  # wie viele Bilder übernommen werden sollen
 
 PROMPT = (
     "Du bist ein erfahrener Reise-Fotograf.\n"
@@ -120,6 +123,33 @@ def main():
     schreibe_csv(ergebnisse, CSV_OUTPUT)
     print(f"Ergebnisse in '{CSV_OUTPUT}' gespeichert.")
 
+    # Nur Einträge mit gültigem Score (nicht None) berücksichtigen
+    gueltige = [e for e in ergebnisse if isinstance(e.get("score"), (int, float))]
+    if not gueltige:
+        print("Keine gültigen Scores, es werden keine Dateien kopiert.")
+    else:
+        # Nach Score absteigend sortieren
+        gueltige.sort(key=lambda x: x["score"], reverse=True)
+        top_bilder = gueltige[:TOP_N]
+
+        # Auswahl-Ordner anlegen (falls nicht vorhanden)
+        AUSWAHL_ORDNER.mkdir(exist_ok=True)
+
+        print(f"\nKopiere die Top {len(top_bilder)} Bilder nach: {AUSWAHL_ORDNER}")
+        for eintrag in top_bilder:
+            src = BILDER_ORDNER / eintrag["datei"]
+            dst = AUSWAHL_ORDNER / eintrag["datei"]
+            try:
+                shutil.copy2(src, dst)
+                print(f" -> {eintrag['datei']} (Score {eintrag['score']}) kopiert")
+            except Exception as e:
+                print(f" !! Fehler beim Kopieren von {eintrag['datei']}: {e}")
+
+    # === Zusammenfassung ===
+    print(f"\n=== FERTIG ===")
+    print(f"Gesamtzeit: {gesamt_zeit:.1f}s | Durchschnitt pro Bild: {gesamt_zeit/len(bilder):.2f}s")
+    print(f"Ergebnisse in '{CSV_OUTPUT}' gespeichert.")
+    print(f"Top-{TOP_N}-Bilder liegen in: '{AUSWAHL_ORDNER}'")
 
 if __name__ == "__main__":
     main()
