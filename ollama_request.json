@@ -1,0 +1,5 @@
+{
+  "model": "llama3.2-vision",
+  "prompt": "Bewerte dieses Urlaubsfoto. Gib ausschließlich JSON im Format {\"score\": Zahl 0-10, \"kommentar\": \"kurzer Satz\", \"tags\": [\"...\", \"...\"]} zurück. Kriterien: Schärfe, Belichtung, Bildaufbau, Motiv, Stimmung.",
+  "images": ["<BASE64_DEINES_BILDES>"]
+}
