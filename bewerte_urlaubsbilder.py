@@ -13,10 +13,12 @@ import requests  # pip install requests
 BILDER_ORDNER = Path(r"E:\photos\2026\Venedig\Kamera")  # <-- anpassen
 AUSWAHL_ORDNER = BILDER_ORDNER / "Auswahl"
 CSV_OUTPUT    = Path("bewertung_urlaub.csv")
-OLLAMA_URL    = "http://eva:11434/api/generate"
-MODELL        = "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M" # "qwen3-vl:4b"  # oder z.B. "llava"
+OLLAMA_URL    = "http://tom:11434/api/generate"
+#MODELL        = "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M"   # oder z.B. "llava"
+MODELL        = "qwen3-vl:4b"  # oder z.B. "llava"
+#MODELL        = "hf.co/mradermacher/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M"  # Modell tut nicht -> Internal Server Error
 UNTERSTUETZTE_ENDUNGEN = {".jpg", ".jpeg"}
-TOP_N = 2  # wie viele Bilder übernommen werden sollen
+TOP_N = 20  # wie viele Bilder übernommen werden sollen
 
 PROMPT = (
     "Du bist ein extrem kritischer Profi-Fotograf für Urlaubsbilder.\n"
@@ -29,8 +31,11 @@ PROMPT = (
     "ANTWORTEN SIE IMMER ALS REINES JSON-OBJEKT nach folgendem Muster: {\"score\": 0-100, \"kommentar\": \"1-2 Sätze\", \"tags\": [\"tag1\",\"tag2\"]}\n"
     "'score' entspricht der Bewertung als Zahl. Wobei 0 einem sehr schlechtem Bild entspricht und 100 einem perfekten Bild entspricht\n"
     "'kommentar' sind Verbesserungsvorschläge\n"
-    "'tags' soll keine Kritik enthalten, sondern ausschließlich eine Beschreibung des Bildes oder Hauptmotiv\n"
-    "Sei brutal ehrlich - 80% deiner Urlaubs-Schnappschüsse sind Durchschnitt! Ignoriere die Auflösung des Bildes, konzentriere dich auf die Komposition des Bildes. Keine Nettigkeiten, nur knallharte Kritik und ehrliche Bewertung!"
+    "'tags' soll keine Kritik enthalten! Ein Tag ist ein Wort, dass das Bild beschreibt. Es sollen pro Bild ca. 5 Tags aufgelistet werden\n"
+    "Sei brutal ehrlich - 80% deiner Urlaubs-Schnappschüsse sind Durchschnitt! Ignoriere die Auflösung des Bildes, konzentriere dich auf die Komposition des Bildes. Keine Nettigkeiten, nur knallharte Kritik und ehrliche Bewertung!\n\n"
+    "=== WICHTIG ===\n"
+    "GIB NUR EIN JSON-OBJEKT ZURÜCK!\n"
+    "KEINE Markdown-Codeblocks (```)\n"
 )
 
 # === HILFSFUNKTIONEN ==========================================================
@@ -62,42 +67,40 @@ def bewerte_bild(pfad: Path) -> dict:
     response.raise_for_status()
     roh_text = response.json().get("response", "").strip()
 
-    # 1. Versuche direkte JSON-Parsing
-    try:
-        data = json.loads(roh_text)
-        return {
-            "score": data.get("score"),
-            "kommentar": data.get("kommentar", ""),
-            "tags": data.get("tags", []),
-        }
-    except json.JSONDecodeError:
-        pass
+    # === NEUE STRATEGIE: Alle möglichen JSONs extrahieren ===
 
-    # 2. Extrahiere JSON mit Regex
-    json_match = re.search(r'\{.*"score"\s*:\s*\d+.*\}', roh_text, re.DOTALL)
-    if json_match:
+    # 1. Markdown-Codeblocks entfernen (```json ... ```)
+    roh_text = re.sub(r'```(?:json)?\s*', '', roh_text, flags=re.DOTALL)
+    roh_text = re.sub(r'```\s*', '\n', roh_text)
+
+    # 2. Alle JSON-Objekte finden
+    json_matches = list(re.finditer(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', roh_text, re.DOTALL))
+
+    for match in json_matches:
         try:
-            data = json.loads(json_match.group(0))
-            return {
-                "score": data.get("score"),
-                "kommentar": data.get("kommentar", ""),
-                "tags": data.get("tags", []),
-            }
+            data = json.loads(match.group(0))
+            if "score" in data and isinstance(data.get("score"), (int, float)):
+                return {
+                    "score": data.get("score"),
+                    "kommentar": data.get("kommentar", ""),
+                    "tags": data.get("tags", []),
+                }
         except json.JSONDecodeError:
-            pass
+            continue
 
-    # 3. Fallback: Score aus Text extrahieren
-    score_match = re.search(r'score\s*[:\-=]\s*(\d+)', roh_text, re.IGNORECASE)
-    if score_match:
+    # 3. Fallback: Beste Score aus Text extrahieren
+    score_matches = re.findall(r'score\s*[:\-=]\s*(\d+(?:\.\d+)?)', roh_text, re.IGNORECASE)
+    if score_matches:
+        best_score = max(float(s) for s in score_matches)
         return {
-            "score": int(score_match.group(1)),
-            "kommentar": "Score extrahiert, volles JSON fehlgeschlagen",
+            "score": int(best_score),
+            "kommentar": "Score aus mehreren Antworten extrahiert",
             "tags": []
         }
 
-    # 4. Total-Fail: Debug ausgeben
-    print(f"  DEBUG: Roh-Antwort: {response.json().get("response", "")}")  # Nur zur Fehlersuche
-    raise ValueError("Konnte kein gültiges JSON oder Score extrahieren")
+    # 4. DEBUG + Fail
+    print(f"  DEBUG Roh-Antwort: {response.json()}")
+    raise ValueError("Kein gültiges JSON/Score gefunden")
 
 
 def schreibe_csv(ergebnisse: list, ziel_pfad: Path):
