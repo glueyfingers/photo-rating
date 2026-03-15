@@ -96,19 +96,19 @@ def main():
 
     print(f"{len(bilder)} Bilder gefunden. Starte Bewertung mit Modell '{MODELL}' ...")
 
-#    ergebnisse = []
+    ergebnisse = []
 
-#    for i, pfad in enumerate(bilder, start=1):
-#        print(f"[{i}/{len(bilder)}] Verarbeite: {pfad.name}")
-#        try:
-#            result = bewerte_bild(pfad)
-#            ergebnisse.append({
-#                "datei": pfad.name,
-#                **result
-#            })
-#            print(f" -> Score: {result['score']} | Tags: {', '.join(result['tags'])}")
-#        except Exception as e:
-#            print(f" !! Fehler bei {pfad.name}: {e}")
+    for i, pfad in enumerate(bilder, start=1):
+        print(f"[{i}/{len(bilder)}] Verarbeite: {pfad.name}")
+        try:
+            result = bewerte_bild(pfad)
+            ergebnisse.append({
+                "datei": pfad.name,
+                **result
+            })
+            print(f" -> Score: {result['score']} | Tags: {', '.join(result['tags'])}")
+        except Exception as e:
+            print(f" !! Fehler bei {pfad.name}: {e}")
 
 #    schreibe_csv(ergebnisse, CSV_OUTPUT)
 #    print(f"Fertig. Ergebnisse in '{CSV_OUTPUT}' gespeichert.")
