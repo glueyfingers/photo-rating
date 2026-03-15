@@ -2,6 +2,7 @@ import os
 import csv
 import json
 import base64
+import time
 from pathlib import Path
 
 import requests  # pip install requests
@@ -10,7 +11,7 @@ import requests  # pip install requests
 BILDER_ORDNER = Path(r"D:\daten\NextCloud\share\Lichtblick\Stadtbild")  # <-- anpassen
 CSV_OUTPUT    = Path("bewertung_urlaub.csv")
 OLLAMA_URL    = "http://eva:11434/api/generate"
-MODELL        = "llama3.2-vision"  # oder z.B. "llava"
+MODELL        = "qwen3-vl:4b"  # oder z.B. "llava"
 UNTERSTUETZTE_ENDUNGEN = {".jpg", ".jpeg"}
 
 PROMPT = (
@@ -74,10 +75,11 @@ def schreibe_csv(ergebnisse: list, ziel_pfad: Path):
     """Schreibt die Bewertungsergebnisse in eine CSV-Datei."""
     with open(ziel_pfad, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["datei", "score", "kommentar", "tags"])
+        writer.writerow(["datei", "zeit_s", "score", "kommentar", "tags"])
         for eintrag in ergebnisse:
             writer.writerow([
                 eintrag["datei"],
+                eintrag["zeit_s"],
                 eintrag["score"],
                 eintrag["kommentar"],
                 ",".join(eintrag["tags"])
@@ -97,22 +99,27 @@ def main():
     print(f"{len(bilder)} Bilder gefunden. Starte Bewertung mit Modell '{MODELL}' ...")
 
     ergebnisse = []
+    gesamt_start = time.perf_counter()
 
     for i, pfad in enumerate(bilder, start=1):
+        bild_start = time.perf_counter()
         print(f"[{i}/{len(bilder)}] Verarbeite: {pfad.name}")
         try:
             result = bewerte_bild(pfad)
+            bild_zeit = time.perf_counter() - bild_start
             ergebnisse.append({
                 "datei": pfad.name,
+                "zeit_s": round(bild_zeit, 2),
                 **result
             })
-            print(f" -> Score: {result['score']} | Tags: {', '.join(result['tags'])}")
+            print(f" -> Score: {result['score']} | Zeit: {bild_zeit:.2f}s | Tags: {', '.join(result['tags'])}")
         except Exception as e:
             print(f" !! Fehler bei {pfad.name}: {e}")
 
-#    schreibe_csv(ergebnisse, CSV_OUTPUT)
-#    print(f"Fertig. Ergebnisse in '{CSV_OUTPUT}' gespeichert.")
-#    print("Öffne die CSV, sortiere nach 'score' absteigend und schau dir die Top-Bilder an.")
+    gesamt_zeit = time.perf_counter() - gesamt_start
+    schreibe_csv(ergebnisse, CSV_OUTPUT)
+    print(f"Ergebnisse in '{CSV_OUTPUT}' gespeichert.")
+
 
 if __name__ == "__main__":
     main()
