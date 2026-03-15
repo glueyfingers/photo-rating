@@ -4,12 +4,13 @@ import json
 import base64
 import time
 import shutil
+import re
 from pathlib import Path
 
 import requests  # pip install requests
 
 # === KONFIGURATION ============================================================
-BILDER_ORDNER = Path(r"D:\daten\NextCloud\share\Lichtblick\Stadtbild")  # <-- anpassen
+BILDER_ORDNER = Path(r"E:\photos\2026\Venedig\Kamera")  # <-- anpassen
 AUSWAHL_ORDNER = BILDER_ORDNER / "Auswahl"
 CSV_OUTPUT    = Path("bewertung_urlaub.csv")
 OLLAMA_URL    = "http://eva:11434/api/generate"
@@ -18,12 +19,22 @@ UNTERSTUETZTE_ENDUNGEN = {".jpg", ".jpeg"}
 TOP_N = 2  # wie viele Bilder übernommen werden sollen
 
 PROMPT = (
-    "Du bist ein erfahrener Reise-Fotograf.\n"
-    "Bewerte dieses Urlaubsfoto nach Schärfe, Belichtung, Bildgestaltung, Motiv und Stimmung.\n"
-    "Gib NUR gültiges JSON im Format "
-    "{\"score\": Zahl 0-10, \"kommentar\": \"kurzer Satz\", \"tags\": [\"tag1\", \"tag2\"]} aus.\n"
-    "Score 0 = unbrauchbar, 10 = herausragendes Foto.\n"
-    "Berücksichtige: offene Augen, keine starke Verwacklung, angenehme Farben, klar erkennbares Motiv.\n"
+    "Du bist ein extrem kritischer Profi-Fotograf für Urlaubsbilder.\n"
+    "Bewerte NUR nach diesen harten Kriterien (jeder Punkt muss erfüllt sein):\n"
+    "1. Perfekte Schärfe (keine Verwacklung, kein Bewegungsunschärfe)\n"
+    "2. Korrekte Belichtung (keine Über-/Unterbelichtung)\n"
+    "3. Offene Augen bei Personen (geschlossene Augen = Score 0-2)\n"
+    "4. Starker Bildaufbau (Drittelregel, führende Linien oder Natürlichkeit)\n"
+    "5. Postkarten-Ästhetik (keine langweiligen Schnappschüsse)\n"
+    "6. Komplementärfarben\n"
+    "Score-Skala:\n"
+    "00-35 = Unbrauchbar (technisch fehlerhaft, geschlossene Augen, verwackelt)\n"
+    "36-65 = Durchschnitt (akzeptabel, aber nichts Besonderes)\n"
+    "76-85 = Gut (fast perfekt, aber kleine Mängel)\n"
+    "86-100 = Weltklasse (perfekt komponiert, emotionell, technisch einwandfrei)\n\n"
+    "Gib NUR JSON: {\"score\": Zahl 0-100, \"grund\": \"1-2 Sätze mit FEHLERN\", \"tags\": [\"tag1\",\"tag2\"]}\n"
+    "Sei brutal ehrlich - 80% deiner Urlaubs-Schnappschüsse sind Durchschnitt! Ignoriere die Auflösung des Bildes, konzentriere dich auf die Qualität. Keine Nettigkeiten, nur knallharte Kritik und ehrliche Bewertung!\n"
+    "ANTWORTEN SIE IMMER ALS REINES JSON-OBJEKT!"
 )
 
 # === HILFSFUNKTIONEN ==========================================================
@@ -48,31 +59,53 @@ def bewerte_bild(pfad: Path) -> dict:
         "model": MODELL,
         "prompt": PROMPT,
         "images": [image_b64],
-        "stream": False
+        "stream": False,
+        "options": {
+            "temperature": 0.1,  # ← NEU: weniger Kreativität = bessere JSON-Konformität
+            "num_predict": 128   # ← NEU: begrenzte Länge
+        }
     }
 
     response = requests.post(OLLAMA_URL, json=payload, timeout=300)
     response.raise_for_status()
     roh_text = response.json().get("response", "").strip()
 
-    # Versuche, direkt JSON zu parsen; bei Fehler evtl. einfache „Reinigung“
-    try:
-        data = json.loads(roh_text)
-    except json.JSONDecodeError:
-        # Primitive Notfall-Reinigung: JSON-Block extrahieren (falls Modell etwas drumherum schreibt)
-        start = roh_text.find("{")
-        end = roh_text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            kandidat = roh_text[start:end+1]
-            data = json.loads(kandidat)
-        else:
-            raise
+     # 1. Versuche direkte JSON-Parsing
+     try:
+         data = json.loads(roh_text)
+         return {
+             "score": data.get("score"),
+             "kommentar": data.get("kommentar", "") or data.get("grund", ""),
+             "tags": data.get("tags", []),
+         }
+     except json.JSONDecodeError:
+         pass
 
-    return {
-        "score": data.get("score"),
-        "kommentar": data.get("kommentar", ""),
-        "tags": data.get("tags", []),
-    }
+     # 2. Extrahiere JSON mit Regex (funktioniert auch bei ```json ... ``` oder Text davor/nachher)
+     json_match = re.search(r'\{.*"score"\s*:\s*\d+.*\}', roh_text, re.DOTALL)
+     if json_match:
+         try:
+             data = json.loads(json_match.group(0))
+             return {
+                 "score": data.get("score"),
+                 "kommentar": data.get("kommentar", "") or data.get("grund", ""),
+                 "tags": data.get("tags", []),
+             }
+         except json.JSONDecodeError:
+             pass
+
+     # 3. Fallback: Score aus Text extrahieren (letzter Rettungsanker)
+     score_match = re.search(r'score\s*[:\-=]\s*(\d+)', roh_text, re.IGNORECASE)
+     if score_match:
+         return {
+             "score": int(score_match.group(1)),
+             "kommentar": "Score extrahiert, volles JSON fehlgeschlagen",
+             "tags": []
+         }
+
+     # 4. Total-Fail: Standard-Default
+     print(f"  DEBUG: Roh-Antwort: {repr(roh_text[:200])}...")  # Nur zur Fehlersuche
+     raise ValueError("Konnte kein gültiges JSON oder Score extrahieren")
 
 def schreibe_csv(ergebnisse: list, ziel_pfad: Path):
     """Schreibt die Bewertungsergebnisse in eine CSV-Datei."""
