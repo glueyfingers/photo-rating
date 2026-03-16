@@ -188,7 +188,7 @@ def berechne_hamming_distanz(hash1: str, hash2: str) -> int:
     # Hamming-Distanz berechnen
     return sum(c1 != c2 for c1, c2 in zip(h1, h2))
 
-def gruppiere_aehnliche_bilder(ergebnisse: list, schwellwert: int = 5) -> dict:
+def gruppiere_aehnliche_bilder(ergebnisse: list, schwellwert: int) -> dict:
     """Gruppiert Bilder basierend auf der Hamming-Distanz ihrer Hashes."""
     gruppen = []
     verwendete_indices = set()
@@ -287,7 +287,7 @@ def main():
     print(f"Ergebnisse in '{CSV_OUTPUT}' gespeichert.")
 
     # Gruppen ähnlicher Bilder finden
-    schwellwert = 20  # Maximal erlaubte Hamming-Distanz für "ähnlich"
+    schwellwert = 15  # Maximal erlaubte Hamming-Distanz für "ähnlich"
     gruppen = gruppiere_aehnliche_bilder(ergebnisse, schwellwert)
 
     # Gruppen ausgeben
