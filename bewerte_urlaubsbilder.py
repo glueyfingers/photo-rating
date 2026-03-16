@@ -6,6 +6,10 @@ import time
 import shutil
 import re
 from pathlib import Path
+from PIL import Image
+import imagehash
+from collections import defaultdict
+
 
 import requests  # pip install requests
 
@@ -13,12 +17,12 @@ import requests  # pip install requests
 BILDER_ORDNER = Path(r"E:\photos\2026\Venedig\Kamera")  # <-- anpassen
 AUSWAHL_ORDNER = BILDER_ORDNER / "Auswahl"
 CSV_OUTPUT    = Path(BILDER_ORDNER / "bewertung_urlaub.csv")
-OLLAMA_URL    = "http://tom:11434/api/generate"
+OLLAMA_URL    = "http://eva:11434/api/generate"
 #MODELL        = "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M"   # oder z.B. "llava"
 MODELL        = "qwen3-vl:4b"  # oder z.B. "llava"
 #MODELL        = "hf.co/mradermacher/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M"  # Modell tut nicht -> Internal Server Error
 UNTERSTUETZTE_ENDUNGEN = {".jpg", ".jpeg"}
-TOP_N = 4  # wie viele Bilder übernommen werden sollen
+TOP_N = 50  # wie viele Bilder übernommen werden sollen
 
 PROMPT = (
     "Du bist ein extrem kritischer Profi-Fotograf. Bewerte dieses Urlaubsfoto nach diesen 20 Kriterien:\n\n"
@@ -30,26 +34,27 @@ PROMPT = (
     "5. Rauschen: Saubere Details?\n"
     "6. Sättigung: Lebendig aber natürlich?\n"
     "7. Dynamikumfang: Details in Licht+Schatten?\n"
-    "8. Horizont: Gerade Linien?\n\n"
+    "8. Horizont: Gerade Linien?\n"
+    "9. Störende Elemente im Bild?\n\n"
     "🎨 KOMPOSITION (30%):\n"
-    "9. Drittelregel: Hauptmotiv richtig platziert?\n"
-    "10. Führende Linien: Blickführung?\n"
-    "11. Tiefenschärfe: Vorder-/Hintergrund?\n"
-    "12. Bildfüllung: Keine leeren Bereiche?\n"
-    "13. Formatwahl: Quer/Hoch passend?\n"
-    "14. Symmetrie: Bei Landschaften?\n\n"
+    "1. Drittelregel: Hauptmotiv richtig platziert?\n"
+    "2. Führende Linien: Blickführung?\n"
+    "3. Tiefenschärfe: Vorder-/Hintergrund?\n"
+    "4. Bildfüllung: Keine leeren Bereiche?\n"
+    "5. Formatwahl: Quer/Hoch passend?\n"
+    "6. Symmetrie: Bei Landschaften?\n\n"
     "✨ BILDWIRKUNG (30%):\n"
-    "15. Motivwahl: Originell/emotional?\n"
-    "16. Moment: Perfekter Augenblick?\n"
-    "17. Emotion: Berührt es?\n"
-    "18. Storytelling: Klare Geschichte?\n"
-    "19. Wow-Faktor: Einzigartig?\n"
-    "20. Ausdruckskraft: Klare Botschaft?\n\n"
+    "1. Motivwahl: Originell/emotional?\n"
+    "2. Moment: Perfekter Augenblick?\n"
+    "3. Emotion: Berührt es?\n"
+    "4. Storytelling: Klare Geschichte?\n"
+    "5. Wow-Faktor: Einzigartig?\n"
+    "6. Ausdruckskraft: Klare Botschaft?\n\n"
     "Score-Rechnung: (Technik×0.4)+(Komposition×0.3)+(Wirkung×0.3)\n\n"
-    "ANTWORTEN IMMER ALS REINES JSON-OBJEKT nach folgendem Muster: {\"score\": 0-100, \"kommentar\": \"1-2 Sätze\", \"tags\": [\"tag1\",\"tag2\"]}\n"
+    "ANTWORTEN IMMER ALS REINES JSON-OBJEKT nach folgendem Muster: {\"score\": 0-100, \"comment\": \"1-2 Sätze\", \"tags\": [\"tag1\",\"tag2\",\"tag3\",\"tag4\",\"tag5\",\"tag6\",\"tag7\",\"tag8\"]}\n"
     "'score' entspricht der Bewertung als Zahl. Wobei 0 einem sehr schlechtem Bild entspricht und 100 einem perfekten Bild entspricht\n"
-    "'kommentar' sind Verbesserungsvorschläge\n"
-    "'tags' soll keine Kritik enthalten! Ein Tag ist ein Wort, dass das Bild beschreibt. Es sollen pro Bild ca. 5 Tags aufgelistet werden\n"
+    "'comment' sind Verbesserungsvorschläge\n"
+    "'tags' soll keine Kritik enthalten! Ein Tag ist ein englisches Wort, dass das Bild beschreibt. Es sollen pro Bild genau 8 Tags aufgelistet werden\n"
     "Ignoriere die Auflösung des Bildes, konzentriere dich auf die Komposition des Bildes.\n\n"
     "=== WICHTIG ===\n"
     "GIB NUR EIN JSON-OBJEKT ZURÜCK!\n"
@@ -82,7 +87,7 @@ def bewerte_bild(pfad: Path) -> dict:
                 "minimum": 0,
                 "maximum": 100
             },
-            "kommentar": {
+            "comment": {
                 "type": "string",
                 "maxLength": 500
             },
@@ -92,7 +97,7 @@ def bewerte_bild(pfad: Path) -> dict:
                     "type": "string",
                     "maxLength": 50
                 },
-                "minItems": 3,
+                "minItems": 8,
                 "maxItems": 8
             }
         },
@@ -129,7 +134,7 @@ def bewerte_bild(pfad: Path) -> dict:
         if "score" in data:
             return {
                 "score": float(data["score"]),
-                "kommentar": data.get("kommentar", ""),
+                "comment": data.get("comment", ""),
                 "tags": data.get("tags", [])
             }
     except json.JSONDecodeError as e:
@@ -146,7 +151,7 @@ def bewerte_bild(pfad: Path) -> dict:
                 if "score" in data:
                     return {
                         "score": float(data["score"]),
-                        "kommentar": data.get("kommentar", ""),
+                        "comment": data.get("comment", ""),
                         "tags": data.get("tags", [])
                     }
             except json.JSONDecodeError:
@@ -157,7 +162,7 @@ def bewerte_bild(pfad: Path) -> dict:
     if score_match:
         return {
             "score": float(score_match.group(1)),
-            "kommentar": "Score extrahiert",
+            "comment": "Score extrahiert",
             "tags": []
         }
 
@@ -165,18 +170,82 @@ def bewerte_bild(pfad: Path) -> dict:
     print(f"  DEBUG Roh-Antwort: {response.json()}")
     raise ValueError("Kein gültiges JSON/Score gefunden")
 
+def berechne_bild_hash(pfad: Path) -> str:
+    """Berechnet den phash-Wert eines Bildes und gibt ihn als Hex-String zurück."""
+    try:
+        with Image.open(pfad) as img:
+            return str(imagehash.phash(img))
+    except Exception as e:
+        print(f"Fehler beim Hashen von {pfad.name}: {e}")
+        return "0"  # Fallback
+
+
+def berechne_hamming_distanz(hash1: str, hash2: str) -> int:
+    """Berechnet die Hamming-Distanz zwischen zwei Hashes (als Hex-Strings)."""
+    # Hashes in Binärstrings umwandeln
+    h1 = bin(int(hash1, 16))[2:].zfill(64)
+    h2 = bin(int(hash2, 16))[2:].zfill(64)
+    # Hamming-Distanz berechnen
+    return sum(c1 != c2 for c1, c2 in zip(h1, h2))
+
+def gruppiere_aehnliche_bilder(ergebnisse: list, schwellwert: int = 5) -> dict:
+    """Gruppiert Bilder basierend auf der Hamming-Distanz ihrer Hashes."""
+    gruppen = []
+    verwendete_indices = set()
+
+    for i, eintrag_i in enumerate(ergebnisse):
+        if i in verwendete_indices:
+            continue
+        # Neue Gruppe starten
+        gruppe = [eintrag_i]
+        verwendete_indices.add(i)
+
+        for j, eintrag_j in enumerate(ergebnisse[i+1:], start=i+1):
+            if j in verwendete_indices:
+                continue
+            distanz = berechne_hamming_distanz(eintrag_i["hash"], eintrag_j["hash"])
+            #print(f"Zwei Bilder Distanz {distanz}...")
+            if distanz <= schwellwert:
+                gruppe.append(eintrag_j)
+                verwendete_indices.add(j)
+
+        if len(gruppe) > 1:  # Nur Gruppen mit mindestens 2 Bildern
+            gruppen.append(gruppe)
+
+    return gruppen
+
+def behalte_bestes_bild_pro_gruppe(ergebnisse: list, gruppen: list) -> list:
+    """Behält aus jeder Gruppe nur das Bild mit dem höchsten Score."""
+    # Alle Bilder, die in einer Gruppe sind, markieren
+    gruppen_bilder = set()
+    for gruppe in gruppen:
+        gruppen_bilder.update(eintrag["datei"] for eintrag in gruppe)
+
+    # Für jede Gruppe das beste Bild finden
+    beste_bilder = []
+    for gruppe in gruppen:
+        if gruppe:  # Falls Gruppe nicht leer
+            bestes_bild = max(gruppe, key=lambda x: x["score"])
+            beste_bilder.append(bestes_bild)
+
+    # Alle Bilder, die nicht in einer Gruppe sind, behalten
+    nicht_in_gruppen = [e for e in ergebnisse if e["datei"] not in gruppen_bilder]
+
+    # Zusammenführen: beste Bilder aus Gruppen + Bilder nicht in Gruppen
+    return beste_bilder + nicht_in_gruppen
+
 
 def schreibe_csv(ergebnisse: list, ziel_pfad: Path):
     """Schreibt die Bewertungsergebnisse in eine CSV-Datei."""
     with open(ziel_pfad, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["datei", "zeit_s", "score", "kommentar", "tags"])
+        writer.writerow(["datei", "zeit_s", "score", "comment", "tags"])
         for eintrag in ergebnisse:
             writer.writerow([
                 eintrag["datei"],
                 eintrag["zeit_s"],
                 eintrag["score"],
-                eintrag["kommentar"],
+                eintrag["comment"],
                 ",".join(eintrag["tags"])
             ])
 
@@ -201,19 +270,35 @@ def main():
         print(f"[{i}/{len(bilder)}] Verarbeite: {pfad.name}")
         try:
             result = bewerte_bild(pfad)
+            bild_hash = berechne_bild_hash(pfad)  # Hash berechnen
             bild_zeit = time.perf_counter() - bild_start
             ergebnisse.append({
                 "datei": pfad.name,
+                "hash": bild_hash,
                 "zeit_s": round(bild_zeit, 2),
                 **result
             })
-            print(f" -> Score: {result['score']} | Zeit: {bild_zeit:.2f}s | Tags: {', '.join(result['tags'])}")
+            print(f" -> Score: {result['score']}  | Hash: {bild_hash} | Zeit: {bild_zeit:.2f}s | Tags: {', '.join(result['tags'])}")
         except Exception as e:
             print(f" !! Fehler bei {pfad.name}: {e}")
 
     gesamt_zeit = time.perf_counter() - gesamt_start
     schreibe_csv(ergebnisse, CSV_OUTPUT)
     print(f"Ergebnisse in '{CSV_OUTPUT}' gespeichert.")
+
+    # Gruppen ähnlicher Bilder finden
+    schwellwert = 20  # Maximal erlaubte Hamming-Distanz für "ähnlich"
+    gruppen = gruppiere_aehnliche_bilder(ergebnisse, schwellwert)
+
+    # Gruppen ausgeben
+    print(f"\n=== Gruppen ähnlicher Bilder (Hamming-Distanz ≤ {schwellwert}) ===")
+    for idx, gruppe in enumerate(gruppen, start=1):
+        print(f"\nGruppe {idx} ({len(gruppe)} Bilder):")
+        for eintrag in gruppe:
+            print(f"  - {eintrag['datei']} (Score: {eintrag['score']:.1f}, Hash: {eintrag['hash']})")
+    print(f"\nInsgesamt {len(gruppen)} Gruppen gefunden.")
+
+    ergebnisse = behalte_bestes_bild_pro_gruppe(ergebnisse, gruppen)
 
     # Nur Einträge mit gültigem Score (nicht None) berücksichtigen
     gueltige = [e for e in ergebnisse if isinstance(e.get("score"), (int, float))]
