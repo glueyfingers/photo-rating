@@ -12,27 +12,45 @@ import requests  # pip install requests
 # === KONFIGURATION ============================================================
 BILDER_ORDNER = Path(r"E:\photos\2026\Venedig\Kamera")  # <-- anpassen
 AUSWAHL_ORDNER = BILDER_ORDNER / "Auswahl"
-CSV_OUTPUT    = Path("bewertung_urlaub.csv")
+CSV_OUTPUT    = Path(BILDER_ORDNER / "bewertung_urlaub.csv")
 OLLAMA_URL    = "http://tom:11434/api/generate"
 #MODELL        = "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M"   # oder z.B. "llava"
 MODELL        = "qwen3-vl:4b"  # oder z.B. "llava"
 #MODELL        = "hf.co/mradermacher/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M"  # Modell tut nicht -> Internal Server Error
 UNTERSTUETZTE_ENDUNGEN = {".jpg", ".jpeg"}
-TOP_N = 20  # wie viele Bilder übernommen werden sollen
+TOP_N = 4  # wie viele Bilder übernommen werden sollen
 
 PROMPT = (
-    "Du bist ein extrem kritischer Profi-Fotograf für Urlaubsbilder.\n"
-    "Bewerte nach diesen Kriterien:\n"
-    "1. Perfekte Schärfe (keine Verwacklung, nur gewollte Bewegungsunschärfe)\n"
-    "2. Korrekte Belichtung (keine Über-/Unterbelichtung)\n"
-    "3. Bei Personen im Hauptmotiv sollen die Augen geöffnet sein und die Gesichter sind zu erkennen\n"
-    "4. Starker Bildaufbau (Drittelregel, führende Linien oder Natürlichkeit)\n"
-    "5. Komplementärfarben\n"
-    "ANTWORTEN SIE IMMER ALS REINES JSON-OBJEKT nach folgendem Muster: {\"score\": 0-100, \"kommentar\": \"1-2 Sätze\", \"tags\": [\"tag1\",\"tag2\"]}\n"
+    "Du bist ein extrem kritischer Profi-Fotograf. Bewerte dieses Urlaubsfoto nach diesen 20 Kriterien:\n\n"
+    "📸 TECHNISCHE QUALITÄT (40%):\n"
+    "1. Schärfe: Perfekter Fokus, keine Verwacklung?\n"
+    "2. Belichtung: Korrekte Helligkeit?\n"
+    "3. Weißabgleich: Natürliche Farben?\n"
+    "4. Kontrast: Ausgewogene Hell-Dunkel?\n"
+    "5. Rauschen: Saubere Details?\n"
+    "6. Sättigung: Lebendig aber natürlich?\n"
+    "7. Dynamikumfang: Details in Licht+Schatten?\n"
+    "8. Horizont: Gerade Linien?\n\n"
+    "🎨 KOMPOSITION (30%):\n"
+    "9. Drittelregel: Hauptmotiv richtig platziert?\n"
+    "10. Führende Linien: Blickführung?\n"
+    "11. Tiefenschärfe: Vorder-/Hintergrund?\n"
+    "12. Bildfüllung: Keine leeren Bereiche?\n"
+    "13. Formatwahl: Quer/Hoch passend?\n"
+    "14. Symmetrie: Bei Landschaften?\n\n"
+    "✨ BILDWIRKUNG (30%):\n"
+    "15. Motivwahl: Originell/emotional?\n"
+    "16. Moment: Perfekter Augenblick?\n"
+    "17. Emotion: Berührt es?\n"
+    "18. Storytelling: Klare Geschichte?\n"
+    "19. Wow-Faktor: Einzigartig?\n"
+    "20. Ausdruckskraft: Klare Botschaft?\n\n"
+    "Score-Rechnung: (Technik×0.4)+(Komposition×0.3)+(Wirkung×0.3)\n\n"
+    "ANTWORTEN IMMER ALS REINES JSON-OBJEKT nach folgendem Muster: {\"score\": 0-100, \"kommentar\": \"1-2 Sätze\", \"tags\": [\"tag1\",\"tag2\"]}\n"
     "'score' entspricht der Bewertung als Zahl. Wobei 0 einem sehr schlechtem Bild entspricht und 100 einem perfekten Bild entspricht\n"
     "'kommentar' sind Verbesserungsvorschläge\n"
     "'tags' soll keine Kritik enthalten! Ein Tag ist ein Wort, dass das Bild beschreibt. Es sollen pro Bild ca. 5 Tags aufgelistet werden\n"
-    "Sei brutal ehrlich - 80% deiner Urlaubs-Schnappschüsse sind Durchschnitt! Ignoriere die Auflösung des Bildes, konzentriere dich auf die Komposition des Bildes. Keine Nettigkeiten, nur knallharte Kritik und ehrliche Bewertung!\n\n"
+    "Ignoriere die Auflösung des Bildes, konzentriere dich auf die Komposition des Bildes.\n\n"
     "=== WICHTIG ===\n"
     "GIB NUR EIN JSON-OBJEKT ZURÜCK!\n"
     "KEINE Markdown-Codeblocks (```)\n"
@@ -56,49 +74,94 @@ def bewerte_bild(pfad: Path) -> dict:
     """Schickt ein Bild an Ollama und gibt das geparste JSON mit Score/Kommentar/Tags zurück."""
     image_b64 = bild_zu_base64(pfad)
 
+    JSON_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "score": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+            },
+            "kommentar": {
+                "type": "string",
+                "maxLength": 500
+            },
+            "tags": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "maxLength": 50
+                },
+                "minItems": 3,
+                "maxItems": 8
+            }
+        },
+        "required": ["score", "kommentar", "tags"],
+        "additionalProperties": False
+    }
+
     payload = {
         "model": MODELL,
         "prompt": PROMPT,
         "images": [image_b64],
+        "format": JSON_SCHEMA,
         "stream": False
     }
 
-    response = requests.post(OLLAMA_URL, json=payload, timeout=300)
+    response = requests.post(OLLAMA_URL, json=payload, timeout=800)
     response.raise_for_status()
-    roh_text = response.json().get("response", "").strip()
 
-    # === NEUE STRATEGIE: Alle möglichen JSONs extrahieren ===
+    # ROH-ANTWORT direkt ausgeben für Debug
+    #roh_response = response.json().get("thinking", "").strip()
+    #roh_response = response.json().get("thinking", "").strip()
+    full_response = response.json()
+    roh_response = full_response.get("thinking", full_response.get("response", "")).strip()
+    #print(f"DEBUG Roh: {repr(roh_response)[:200]}...")  # Zeigt escaped Zeichen
 
-    # 1. Markdown-Codeblocks entfernen (```json ... ```)
-    roh_text = re.sub(r'```(?:json)?\s*', '', roh_text, flags=re.DOTALL)
-    roh_text = re.sub(r'```\s*', '\n', roh_text)
+    # 1. Markdown entfernen
+    cleaned = re.sub(r'```(?:json)?\s*', '', roh_response, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r'```\s*$', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r'^\s*', '', cleaned)  # Leading Whitespace
 
-    # 2. Alle JSON-Objekte finden
-    json_matches = list(re.finditer(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', roh_text, re.DOTALL))
+    try:
+        # DIREKT JSON parsen (meistens klappt das!)
+        data = json.loads(cleaned)
+        if "score" in data:
+            return {
+                "score": float(data["score"]),
+                "kommentar": data.get("kommentar", ""),
+                "tags": data.get("tags", [])
+            }
+    except json.JSONDecodeError as e:
+        print(f"JSON-Fehler: {e}")
 
-    for match in json_matches:
-        try:
-            data = json.loads(match.group(0))
-            if "score" in data and isinstance(data.get("score"), (int, float)):
-                return {
-                    "score": data.get("score"),
-                    "kommentar": data.get("kommentar", ""),
-                    "tags": data.get("tags", []),
-                }
-        except json.JSONDecodeError:
-            continue
+    # 2. Fallback: Brute-Force JSON-Suche
+    start = cleaned.find('{')
+    if start != -1:
+        end = cleaned.rfind('}')
+        if end > start:
+            try:
+                candidate = cleaned[start:end+1]
+                data = json.loads(candidate)
+                if "score" in data:
+                    return {
+                        "score": float(data["score"]),
+                        "kommentar": data.get("kommentar", ""),
+                        "tags": data.get("tags", [])
+                    }
+            except json.JSONDecodeError:
+                pass
 
-    # 3. Fallback: Beste Score aus Text extrahieren
-    score_matches = re.findall(r'score\s*[:\-=]\s*(\d+(?:\.\d+)?)', roh_text, re.IGNORECASE)
-    if score_matches:
-        best_score = max(float(s) for s in score_matches)
+    # 3. Letzter Fallback
+    score_match = re.search(r'"score"\s*:\s*(\d+(?:\.\d+)?)', cleaned)
+    if score_match:
         return {
-            "score": int(best_score),
-            "kommentar": "Score aus mehreren Antworten extrahiert",
+            "score": float(score_match.group(1)),
+            "kommentar": "Score extrahiert",
             "tags": []
         }
 
-    # 4. DEBUG + Fail
+    # 4: DEBUG + Fail
     print(f"  DEBUG Roh-Antwort: {response.json()}")
     raise ValueError("Kein gültiges JSON/Score gefunden")
 
