@@ -37,6 +37,9 @@ JSON_SCHEMA = {
             "minimum": -10,
             "maximum": 10
         },
+        "comment": {
+            "type": "string"
+        },
         "color": {
             "type": "object",
             "properties": {
@@ -66,16 +69,21 @@ JSON_SCHEMA = {
 
 
 PROMPT = (
-    "Du bist ein Foto-Editor. Analysiere dieses Bild und schlage einen optimalen Ausschnitt, "
-    "eine sinnvolle Rotation und Basis-Farbkorrekturen vor.\n\n"
-    f"ANTWORTEN IMMER ALS REINES JSON-OBJEKT nach folgendem Muster: {json.dumps(JSON_SCHEMA, indent=2)}"
-    "'crop' enthält die Pixel-Koordinaten für den optimalen Ausschnitt des Bildes. \n"
-    "'left' ist die linke Pixelposition, "
-    "'top' die obere,"
-    "'right' die rechte, "
-    "'bottom' die untere. \n"
-    "Diese Werte müssen innerhalb der Bildgrenzen liegen und left < right, top < bottom sein.\n"
+    "Du bist ein Profi-Fotograf. Analysiere dieses Bild und schlage einen optimalen Ausschnitt, "
+    "eine sinnvolle Rotation und Basis-Farbkorrekturen vor. \n\n"
+    "Bei der Auswahl des Bildausschnitt müssen ästetische Regeln wie die Drittelregel, Mittige Ausrichtung, "
+    "Störfaktoren entfernen, Führungslinien nutzen. Es soll immer Originale Bildverhältnis beibehalten bleiben\n"
+    f"ANTWORTE IMMER ALS REINES JSON-OBJEKT nach folgendem Muster: {json.dumps(JSON_SCHEMA, indent=2)}"
+    "'crop' enthält die Pixel-Koordinaten für den optimalen Ausschnitt des Motivs im Bild. "
+    "Die obere linke Ecke des ORIGINALBILDES hat die Koordinate (0,0)."
+    "Die x-Achse (Pixel) verläuft NACH RECHTS, die y-Achse NACH UNTEN.\n"
+    "'left' ist die x-Koordinate der linken Kante des Ausschnitts.\n"
+    "'top' ist die y-Koordinate der oberen Kante des Ausschnitts.\n"
+    "'right' ist die x-Koordinate der rechten Kante des Ausschnitts.\n"
+    "'bottom' ist die y-Koordinate der unteren Kante des Ausschnitts.\n"
+    "Es muss immer gelten: 0 <= left < right <= Bildbreite und 0 <= top < bottom <= Bildhöhe und right - left > 800 und bottom - top > 800.\n"
     "'rotation' ist die Drehung in Grad (Gleitkommazahl).\n"
+    "'comment' Beschreibung in Textform was mit dem neuen Bildausschnitt verbessert wird\n"
     "Positive Werte drehen im Uhrzeigersinn, negative gegen den Uhrzeigersinn. \n"
     "'color' enthält die Farbkorrektur-Faktoren als Gleitkommazahlen (1.0 = unverändert):\n"
     "'brightness': Helligkeit (0.3 = dunkler, 3.0 = heller)\n"
@@ -84,6 +92,7 @@ PROMPT = (
     "=== WICHTIG ===\n"
     "GIB NUR EIN JSON-OBJEKT ZURÜCK!\n"
     "KEINE Markdown-Codeblocks (```)\n"
+    "ES DÜRFEN MAXIMAL DIE HÄLFTE DES BILDES WEGGESCHNITTEN WERDEN\n"
 )
 
 def bild_zu_base64(pfad: Path) -> str:
@@ -103,6 +112,7 @@ def parse_adjustments(data):
             "bottom": int(data["crop"]["bottom"])
         },
         "rotation": float(data["rotation"]),
+        "comment": data["comment"],
         "color": {
             "brightness": float(data["color"]["brightness"]),
             "contrast": float(data["color"]["contrast"]),
@@ -149,13 +159,13 @@ def ask_ollama_for_adjustments(image_path: Path) -> dict:
             try:
                 candidate = cleaned[start:end+1]
                 data = json.loads(candidate)
-                if "score" in data:
+                if "crop" in data:
                     return parse_adjustments(data)
             except json.JSONDecodeError:
                 pass
 
     # 3. Letzter Fallback
-    score_match = re.search(r'"score"\s*:\s*(\d+(?:\.\d+)?)', cleaned)
+    score_match = re.search(r'"crop"\s*:\s*(\d+(?:\.\d+)?)', cleaned)
     if score_match:
         return {
             "crop": {
@@ -165,6 +175,7 @@ def ask_ollama_for_adjustments(image_path: Path) -> dict:
                 "bottom": 0
             },
             "rotation": 0.0,
+            "comment": "Fehler beim Parsen",
             "color": {
                 "brightness": 1.0,
                 "contrast": 1.0,
@@ -199,14 +210,13 @@ def apply_adjustments(
     top = clamp(top, 0, h - 1)
     right = clamp(right, left + 1, w)
     bottom = clamp(bottom, top + 1, h)
-
-    img = img.crop((left, top, right, bottom))
+    #img = img.crop((left, top, right, bottom))
 
     # Rotation
     rotation = float(adjustments.get("rotation", 0.0))
     rotation = clamp(rotation, -MAX_ROTATION, MAX_ROTATION)
     # Pillow rotiert gegen den Uhrzeigersinn, daher Vorzeichen drehen
-    img = img.rotate(-rotation, expand=True)
+    #img = img.rotate(-rotation, expand=True)
 
     # Farbkorrekturen
     color_adj = adjustments.get("color", {})
