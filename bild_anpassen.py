@@ -7,16 +7,16 @@ from PIL import Image, ImageEnhance
 
 
 # === KONFIGURATION ============================================================
-BILD_INPUT    = Path(r"D:\daten\NextCloud\share\Lichtblick\Venedig\DSC03190.JPG")  # <-- anpassen
-BILD_OUTPUT   = Path(r"D:\daten\NextCloud\share\Lichtblick\Venedig\DSC031902.JPG")
+DIR_INPUT    = Path(r"D:\daten\NextCloud\share\Lichtblick\Venedig\Auswahl")
+DIR_OUTPUT   = Path(r"D:\daten\NextCloud\share\Lichtblick\Venedig\Angepasst")
 OLLAMA_URL    = "http://eva:11434/api/generate"
 #MODELL        = "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M"   # oder z.B. "llava"
 MODELL        = "qwen3-vl:4b"  # oder z.B. "llava"
 #MODELL        = "hf.co/mradermacher/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M"  # Modell tut nicht -> Internal Server Error
 MAX_ROTATION = 10
-BRIGHTNESS_RANGE = (0.3, 3.0)
-CONTRAST_RANGE   = (0.3, 3.0)
-SAT_RANGE        = (0.3, 3.0)
+BRIGHTNESS_RANGE = (0.5, 1.5)
+CONTRAST_RANGE   = (0.5, 1.5)
+SAT_RANGE        = (0.5, 1.5)
 
 JSON_SCHEMA = {
     "type": "object",
@@ -43,27 +43,30 @@ JSON_SCHEMA = {
         "color": {
             "type": "object",
             "properties": {
+                "recommended": {
+                    "type": "boolean"
+                },
                 "brightness": {
                     "type": "number",
-                    "minimum": 0.3,
-                    "maximum": 3.0
+                    "minimum": 0.5,
+                    "maximum": 1.5
                 },
                 "contrast": {
                     "type": "number",
-                    "minimum": 0.3,
-                    "maximum": 3.0
+                    "minimum": 0.5,
+                    "maximum": 1.5
                 },
                 "saturation": {
                     "type": "number",
-                    "minimum": 0.3,
-                    "maximum": 3.0
+                    "minimum": 0.5,
+                    "maximum": 1.5
                 }
             },
-            "required": ["brightness", "contrast", "saturation"],
+            "required": ["brightness", "contrast", "saturation", "recommended"],
             "additionalProperties": False
         }
     },
-    "required": ["crop", "rotation", "color"],
+    "required": ["crop", "rotation", "color", "comment"],
     "additionalProperties": False
 }
 
@@ -83,12 +86,14 @@ PROMPT = (
     "'bottom' ist die y-Koordinate der unteren Kante des Ausschnitts.\n"
     "Es muss immer gelten: 0 <= left < right <= Bildbreite und 0 <= top < bottom <= Bildhöhe und right - left > 800 und bottom - top > 800.\n"
     "'rotation' ist die Drehung in Grad (Gleitkommazahl).\n"
-    "'comment' Beschreibung in Textform was mit dem neuen Bildausschnitt verbessert wird\n"
+    #"'comment' Beschreibung in Textform was mit dem neuen Bildausschnitt verbessert wird\n"
+    "'comment' Beschreibung womit die Farbkorrekturen begründet werden. \n"
     "Positive Werte drehen im Uhrzeigersinn, negative gegen den Uhrzeigersinn. \n"
     "'color' enthält die Farbkorrektur-Faktoren als Gleitkommazahlen (1.0 = unverändert):\n"
-    "'brightness': Helligkeit (0.3 = dunkler, 3.0 = heller)\n"
-    "'contrast': Kontrast (0.3 = flacher, 3.0 = stärker)\n"
-    "'saturation': Farbsättigung (0.3 = fahler, 3.0 = kräftiger)\n\n"
+    "'recommended': Du empfiehlst eine Farbanpassung (ja = True, nein = False)\n"
+    "'brightness': Helligkeit (0.5 = dunkler, 1.5 = heller)\n"
+    "'contrast': Kontrast (0.5 = flacher, 1.5 = stärker)\n"
+    "'saturation': Farbsättigung (0.5 = fahler, 1.5 = kräftiger)\n\n"
     "=== WICHTIG ===\n"
     "GIB NUR EIN JSON-OBJEKT ZURÜCK!\n"
     "KEINE Markdown-Codeblocks (```)\n"
@@ -114,6 +119,7 @@ def parse_adjustments(data):
         "rotation": float(data["rotation"]),
         "comment": data["comment"],
         "color": {
+            "recommended": data["color"]["recommended"],
             "brightness": float(data["color"]["brightness"]),
             "contrast": float(data["color"]["contrast"]),
             "saturation": float(data["color"]["saturation"])
@@ -177,6 +183,7 @@ def ask_ollama_for_adjustments(image_path: Path) -> dict:
             "rotation": 0.0,
             "comment": "Fehler beim Parsen",
             "color": {
+                "recommended": False,
                 "brightness": 1.0,
                 "contrast": 1.0,
                 "saturation": 1.0
@@ -192,11 +199,15 @@ def apply_adjustments(
     adjustments: dict,
     output_path: Path,
 ):
-    """
-    Wendet Crop, Rotation und Farbkorrekturen auf ein Bild an
-    und speichert das Ergebnis.
-    """
-    img = Image.open(image_path).convert("RGB")
+    img = Image.open(image_path)
+
+    # Originalformat merken (für EXIF etc.)
+    original_format = img.format
+
+    # In RGB konvertieren NUR wenn nötig (für Bearbeitung)
+    if img.mode != 'RGB':
+        img = img.convert("RGB")
+
     w, h = img.size
 
     crop = adjustments.get("crop", {})
@@ -220,6 +231,7 @@ def apply_adjustments(
 
     # Farbkorrekturen
     color_adj = adjustments.get("color", {})
+    recommended = color_adj.get("recommended", False)
     brightness = float(color_adj.get("brightness", 1.0))
     contrast = float(color_adj.get("contrast", 1.0))
     saturation = float(color_adj.get("saturation", 1.0))
@@ -228,32 +240,80 @@ def apply_adjustments(
     contrast = clamp(contrast, *CONTRAST_RANGE)
     saturation = clamp(saturation, *SAT_RANGE)
 
-    if brightness != 1.0:
-        img = ImageEnhance.Brightness(img).enhance(brightness)
-    if contrast != 1.0:
-        img = ImageEnhance.Contrast(img).enhance(contrast)
-    if saturation != 1.0:
-        img = ImageEnhance.Color(img).enhance(saturation)
+    if recommended:
+        if brightness != 1.0:
+            img = ImageEnhance.Brightness(img).enhance(brightness)
+        if contrast != 1.0:
+            img = ImageEnhance.Contrast(img).enhance(contrast)
+        if saturation != 1.0:
+            img = ImageEnhance.Color(img).enhance(saturation)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    img.save(output_path, quality=95)
+
+    # EXIF-Daten übernehmen
+    exif = img.info.get('exif') if 'exif' in img.info else None
+
+    if recommended:
+        if original_format == 'JPEG' or output_path.suffix.lower() in ['.jpg', '.jpeg']:
+            img.save(output_path, 'JPEG', quality=95)
+        elif original_format == 'PNG' or output_path.suffix.lower() == '.png':
+            img.save(output_path, 'PNG', compress_level=6)  # PNG-Kompression (0-9)
+        elif original_format == 'TIFF' or output_path.suffix.lower() == '.tiff':
+            img.save(output_path, 'TIFF', compression='none')  # Lossless
+        else:
+            img.save(output_path, quality=95)  # Fallback
     print(f"Gespeichert: {output_path}")
 
+def process_image_batch(input_dir: Path, output_dir: Path):
+    """Verarbeitet alle Bilder im Eingabeordner."""
+    if not input_dir.exists():
+        raise FileNotFoundError(f"Eingabeordner nicht gefunden: {input_dir}")
+
+    # Unterstützte Formate
+    image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.tiff', '*.tif', '*.webp']
+    image_files = []
+    for ext in image_extensions:
+        image_files.extend(input_dir.glob(ext))
+        image_files.extend(input_dir.glob(ext.upper()))  # Auch Großbuchstaben
+
+    if not image_files:
+        print(f"❌ Keine Bilddateien im Ordner {input_dir} gefunden.")
+        return
+
+    print(f"📁 Gefundene Bilder: {len(image_files)}")
+
+    # Ausgabeordner erstellen
+    print(f"📁 Ausgabeordner: {output_dir}")
+
+    processed = 0
+    for image_path in image_files:
+        try:
+            print(f"\n🔄 Verarbeite: {image_path.name}")
+
+            # Ollama-Anpassungen abrufen
+            adjustments = ask_ollama_for_adjustments(image_path)
+            print(f"   Anpassungen: Crop({adjustments['crop']}), Rot:{adjustments['rotation']:.1f}°")
+            print(f"   Farben: R{adjustments['color']['recommended']} B{adjustments['color']['brightness']:.2f} C{adjustments['color']['contrast']:.2f} S{adjustments['color']['saturation']:.2f}")
+            print(f"   Kommentar: S{adjustments['comment']}")
+
+            # Ausgabename erstellen
+            stem = image_path.stem
+            suffix = image_path.suffix
+            output_path = output_dir / f"{stem}_adjusted{suffix}"
+
+            # Anwenden und speichern
+            apply_adjustments(image_path, adjustments, output_path)
+            processed += 1
+
+        except Exception as e:
+            print(f"❌ Fehler bei {image_path.name}: {e}")
+            continue
+
+    print(f"\n✅ Fertig! {processed}/{len(image_files)} Bilder verarbeitet.")
+    print(f"📁 Ergebnisse: {output_dir}")
+
 def main():
-    if not BILD_INPUT.exists():
-        raise FileNotFoundError(f"Bild nicht gefunden: {BILD_INPUT}")
-
-    if BILD_OUTPUT.exists():
-        raise FileNotFoundError(f"Bild gefunden und will nicht überschreiben: {BILD_OUTPUT}")
-
-    adjustments = ask_ollama_for_adjustments(BILD_INPUT)
-    print(json.dumps(adjustments, indent=2))
-
-    try:
-        apply_adjustments(BILD_INPUT, adjustments, BILD_OUTPUT)
-    except Exception as e:
-        print(f"Fehler bei der Bildbearbeitung: {e}")
-        sys.exit(1)
+    process_image_batch(DIR_INPUT, DIR_OUTPUT)
 
 
 if __name__ == "__main__":
