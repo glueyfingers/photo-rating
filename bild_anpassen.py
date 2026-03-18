@@ -4,18 +4,21 @@ import requests
 import re
 from pathlib import Path
 from PIL import Image, ImageEnhance
+from PIL.ExifTags import TAGS
 
 
 # === KONFIGURATION ============================================================
-DIR_INPUT    = Path(r"D:\daten\NextCloud\share\Lichtblick\Venedig\Auswahl")
-DIR_OUTPUT   = Path(r"D:\daten\NextCloud\share\Lichtblick\Venedig\Angepasst")
+
+DIR_SOURCE   = r"D:\daten\NextCloud\share\Lichtblick\Venedig"
+DIR_INPUT    = Path(DIR_SOURCE) / "Auswahl"
+DIR_OUTPUT   = Path(DIR_SOURCE) / "Angepasst"
 OLLAMA_URL    = "http://eva:11434/api/generate"
 #MODELL        = "hf.co/bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M"   # oder z.B. "llava"
 MODELL        = "qwen3-vl:4b"  # oder z.B. "llava"
 #MODELL        = "hf.co/mradermacher/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M"  # Modell tut nicht -> Internal Server Error
 MAX_ROTATION = 10
-BRIGHTNESS_RANGE = (0.5, 1.5)
-CONTRAST_RANGE   = (0.5, 1.5)
+BRIGHTNESS_RANGE = (0.7, 1.3)
+CONTRAST_RANGE   = (0.8, 1.2)
 SAT_RANGE        = (0.5, 1.5)
 
 JSON_SCHEMA = {
@@ -48,13 +51,13 @@ JSON_SCHEMA = {
                 },
                 "brightness": {
                     "type": "number",
-                    "minimum": 0.5,
-                    "maximum": 1.5
+                    "minimum": 0.7,
+                    "maximum": 1.3
                 },
                 "contrast": {
                     "type": "number",
-                    "minimum": 0.5,
-                    "maximum": 1.5
+                    "minimum": 0.8,
+                    "maximum": 1.2
                 },
                 "saturation": {
                     "type": "number",
@@ -74,8 +77,9 @@ JSON_SCHEMA = {
 PROMPT = (
     "Du bist ein Profi-Fotograf. Analysiere dieses Bild und schlage einen optimalen Ausschnitt, "
     "eine sinnvolle Rotation und Basis-Farbkorrekturen vor. \n\n"
-    "Bei der Auswahl des Bildausschnitt müssen ästetische Regeln wie die Drittelregel, Mittige Ausrichtung, "
-    "Störfaktoren entfernen, Führungslinien nutzen. Es soll immer Originale Bildverhältnis beibehalten bleiben\n"
+    "Bei der Auswahl des Bildausschnitt müssen ästetische Regeln wie die Drittelregel oder Mittige Ausrichtung, "
+    "Störfaktoren entfernen, Führungslinien nutzen. Es soll immer Originale Bildverhältnis "
+    "(Bildhöhe / Bildbreite =  Bildhöhe2 / Bildbreite2) beibehalten bleiben\n"
     f"ANTWORTE IMMER ALS REINES JSON-OBJEKT nach folgendem Muster: {json.dumps(JSON_SCHEMA, indent=2)}"
     "'crop' enthält die Pixel-Koordinaten für den optimalen Ausschnitt des Motivs im Bild. "
     "Die obere linke Ecke des ORIGINALBILDES hat die Koordinate (0,0)."
@@ -86,13 +90,13 @@ PROMPT = (
     "'bottom' ist die y-Koordinate der unteren Kante des Ausschnitts.\n"
     "Es muss immer gelten: 0 <= left < right <= Bildbreite und 0 <= top < bottom <= Bildhöhe und right - left > 800 und bottom - top > 800.\n"
     "'rotation' ist die Drehung in Grad (Gleitkommazahl).\n"
-    #"'comment' Beschreibung in Textform was mit dem neuen Bildausschnitt verbessert wird\n"
-    "'comment' Beschreibung womit die Farbkorrekturen begründet werden. \n"
+    "'comment' Beschreibung in Textform was mit dem neuen Bildausschnitt verbessert wird\n"
+    #"'comment' Beschreibung womit die Farbkorrekturen begründet werden. \n"
     "Positive Werte drehen im Uhrzeigersinn, negative gegen den Uhrzeigersinn. \n"
     "'color' enthält die Farbkorrektur-Faktoren als Gleitkommazahlen (1.0 = unverändert):\n"
     "'recommended': Du empfiehlst eine Farbanpassung (ja = True, nein = False)\n"
-    "'brightness': Helligkeit (0.5 = dunkler, 1.5 = heller)\n"
-    "'contrast': Kontrast (0.5 = flacher, 1.5 = stärker)\n"
+    "'brightness': Helligkeit (0.7 = dunkler, 1.3 = heller)\n"
+    "'contrast': Kontrast (0.8 = flacher, 1.2 = stärker)\n"
     "'saturation': Farbsättigung (0.5 = fahler, 1.5 = kräftiger)\n\n"
     "=== WICHTIG ===\n"
     "GIB NUR EIN JSON-OBJEKT ZURÜCK!\n"
@@ -201,6 +205,7 @@ def apply_adjustments(
 ):
     img = Image.open(image_path)
 
+
     # Originalformat merken (für EXIF etc.)
     original_format = img.format
 
@@ -251,11 +256,11 @@ def apply_adjustments(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # EXIF-Daten übernehmen
-    exif = img.info.get('exif') if 'exif' in img.info else None
+    exif_raw = img.info.get('exif') if 'exif' in img.info else None
 
     if recommended:
         if original_format == 'JPEG' or output_path.suffix.lower() in ['.jpg', '.jpeg']:
-            img.save(output_path, 'JPEG', quality=95)
+            img.save(output_path, 'JPEG', quality=95)  # JPEG mit Qualität 95 und EXIF
         elif original_format == 'PNG' or output_path.suffix.lower() == '.png':
             img.save(output_path, 'PNG', compress_level=6)  # PNG-Kompression (0-9)
         elif original_format == 'TIFF' or output_path.suffix.lower() == '.tiff':
@@ -294,7 +299,7 @@ def process_image_batch(input_dir: Path, output_dir: Path):
             adjustments = ask_ollama_for_adjustments(image_path)
             print(f"   Anpassungen: Crop({adjustments['crop']}), Rot:{adjustments['rotation']:.1f}°")
             print(f"   Farben: R{adjustments['color']['recommended']} B{adjustments['color']['brightness']:.2f} C{adjustments['color']['contrast']:.2f} S{adjustments['color']['saturation']:.2f}")
-            print(f"   Kommentar: S{adjustments['comment']}")
+            print(f"   Kommentar: {adjustments['comment']}")
 
             # Ausgabename erstellen
             stem = image_path.stem
